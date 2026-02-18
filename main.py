@@ -113,9 +113,10 @@ def fetch_with_retry(client, url, tmp_path, max_retries, backoff, ua):
     (indicates an auth redirect — caller should abort with a helpful message).
     Raises on exhausted retries for network errors.
     """
+    current_ua = ua
     for attempt in range(1, max_retries + 1):
         try:
-            with client.stream("GET", url, headers={"User-Agent": ua}, follow_redirects=True) as response:
+            with client.stream("GET", url, headers={"User-Agent": current_ua}, follow_redirects=True) as response:
                 status = response.status_code
                 headers = response.headers
 
@@ -124,6 +125,7 @@ def fetch_with_retry(client, url, tmp_path, max_retries, backoff, ua):
                     retry_after = int(headers.get("Retry-After", 5))
                     log.warning(f"Rate limited. Retrying in {retry_after}s...")
                     time.sleep(retry_after)
+                    current_ua = _random_ua()
                     continue
 
                 if status in (500, 502, 503, 504):
@@ -133,6 +135,7 @@ def fetch_with_retry(client, url, tmp_path, max_retries, backoff, ua):
                     wait = backoff * 2 ** (attempt - 1)
                     log.warning(f"Server error {status}, retrying in {wait}s ({attempt}/{max_retries})...")
                     time.sleep(wait)
+                    current_ua = _random_ua()
                     continue
 
                 if status == 200:
@@ -149,6 +152,7 @@ def fetch_with_retry(client, url, tmp_path, max_retries, backoff, ua):
         except (httpx.TimeoutException, httpx.ReadError, httpx.ConnectError) as e:
             if attempt == max_retries:
                 raise
+            current_ua = _random_ua()
             wait = backoff * 2 ** (attempt - 1)
             log.warning(f"Network error ({e.__class__.__name__}), retrying in {wait}s ({attempt}/{max_retries})...")
             time.sleep(wait)
