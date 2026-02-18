@@ -82,7 +82,7 @@ def fetch_with_retry(client, url, tmp_path, max_retries, backoff):
     """
     for attempt in range(1, max_retries + 1):
         try:
-            with client.stream("GET", url) as response:
+            with client.stream("GET", url, follow_redirects=True) as response:
                 status = response.status_code
                 headers = response.headers
 
