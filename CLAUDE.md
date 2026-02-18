@@ -21,22 +21,29 @@ pip install -e .
 ## Running
 
 ```bash
-python main.py
+python main.py <url> [--output/-o PATH] [--start/-s PAGE] [--delay/-d SECONDS]
 ```
 
-The tool is interactive: it prompts for a base URL on each iteration, appending a zero-padded page number (e.g. `001.jpg`). The user must strip the page suffix from the URL before entering it. Downloads stop when a non-200 response is received, after which `img2pdf()` is called automatically.
+`url` is the base image URL with the page suffix stripped:
+
+```bash
+python main.py https://www.pearsonactivelearn.com/.../images/iAL_EMC_Psychology_68068
+```
+
+| Argument | Default | Description |
+| --- | --- | --- |
+| `url` | required | Base image URL without page suffix |
+| `--output`/`-o` | `download/<name>/<name>.pdf` | Output PDF path |
+| `--start`/`-s` | `1` | Start from this page number (for resuming) |
+| `--delay`/`-d` | `0.5` | Delay in seconds between requests |
+
+Images are saved to `download/<name>/` (created automatically). Downloads stop on a 404 response, after which `img2pdf()` is called automatically. Already-downloaded pages are skipped (with JPEG integrity verification).
 
 ## Architecture
 
-Single script `main.py` with three functions:
+Single script `main.py` with these functions:
 
-- **`new_name(title)`** — sanitizes filenames by replacing special characters with underscores.
-- **`get_file_extension(filename)`** — returns the file extension.
-- **`img2pdf(name, num)`** — iterates downloaded JPGs, embeds each as a DCTDecode image XObject in a pikepdf page, and saves `combined.pdf` in the working directory. Pillow is used to read image dimensions and colour mode (RGB/CMYK/grayscale).
-
-The module-level code runs an interactive download loop (pages 1–1000) using a persistent `httpx.Client` session, saves images into `.\download\`, then calls `img2pdf()` on completion.
-
-## Known Issues
-
-- Paths are hard-coded with Windows separators (`.\download\\`). On macOS/Linux, the `download` directory must exist in the working directory and path separators need to be changed to work correctly.
-- `main.py` requests the URL interactively on every loop iteration rather than once at the start — this is by design but may be confusing.
+- **`new_name(title)`** — sanitizes filenames by replacing special characters with underscores, preserving dashes.
+- **`is_valid_jpeg(path)`** — validates a file is a readable JPEG using `Image.verify()`.
+- **`fetch_with_retry(client, url, delay)`** — fetches a URL with retries (up to 3) and exponential backoff on transient network errors, 5xx responses, and 429 rate limits.
+- **`img2pdf(img_path, name, num, output)`** — iterates downloaded JPGs, embeds each as a DCTDecode image XObject in a pikepdf page, and saves the output PDF. Pillow is used to read image dimensions and colour mode (RGB/CMYK/grayscale).
