@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "pearson-active-book-downloader"
+version = "0.1.0"
+requires-python = ">=3.8"
+dependencies = [
+    "pikepdf>=8.0.0",
+    "Pillow>=10.0.0",
+    "httpx[http2]>=0.27.0",
+]
+
+[project.scripts]
+pearson-downloader = "pearson_active_book_downloader.main:main"
