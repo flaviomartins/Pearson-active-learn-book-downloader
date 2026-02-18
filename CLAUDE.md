@@ -9,13 +9,13 @@ A Python CLI tool for downloading Pearson Active Learning textbook images and co
 ## Dependencies
 
 ```bash
-pip install pikepdf Pillow httpx[http2] tqdm
+pip install pikepdf Pillow httpx[http2] tqdm fake-useragent
 ```
 
 With browser cookie extraction support:
 
 ```bash
-pip install pikepdf Pillow httpx[http2] tqdm browser-cookie3
+pip install pikepdf Pillow httpx[http2] tqdm fake-useragent browser-cookie3
 ```
 
 Or via pyproject.toml:
@@ -70,8 +70,9 @@ Three ways to authenticate (can be combined; later sources override earlier ones
 
 Single script `main.py` with these functions:
 
-- **`load_cookies(cookie_str, cookie_file, browser)`** — returns a merged cookie dict from a browser (via rookiepy), a Netscape cookie file, and/or a raw cookie string.
+- **`_random_ua()`** — returns a random User-Agent string via `fake-useragent`, falling back to a static Chrome UA if the library is unavailable. A single UA is picked per session (`session_ua`) and reused across all requests; a fresh one is picked on each retry (429, 5xx, network error).
+- **`load_cookies(cookie_str, cookie_file, browser)`** — returns a merged cookie dict from a browser (via browser-cookie3), a Netscape cookie file, and/or a raw cookie string.
 - **`is_valid_jpeg(path)`** — validates a file is a readable JPEG using `Image.verify()`.
-- **`fetch_with_retry(client, url, tmp_path, max_retries, backoff)`** — streams a URL to `tmp_path` with retries and exponential backoff on transient network errors, 5xx responses, and 429 rate limits. Returns a sentinel `(302, headers)` when the server redirects to a non-image URL (auth redirect).
+- **`fetch_with_retry(client, url, tmp_path, max_retries, backoff, ua)`** — streams a URL to `tmp_path` with retries and exponential backoff on transient network errors, 5xx responses, and 429 rate limits. Rotates to a new random UA on each retry. Returns a sentinel `(302, headers)` when the server redirects to a non-image URL (auth redirect).
 - **`_load_page(img_file)`** — reads a JPEG file and returns its bytes, dimensions, and pikepdf colorspace; used by `ThreadPoolExecutor` in `img2pdf`.
 - **`img2pdf(img_path, name, num, output, quiet)`** — builds a PDF by loading images in parallel batches (`PDF_BATCH_SIZE=50`) with `ThreadPoolExecutor`, embedding each as a DCTDecode image XObject in a pikepdf page.
