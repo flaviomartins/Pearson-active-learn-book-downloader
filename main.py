@@ -69,13 +69,6 @@ _current_tmp: Path | None = None
 log = logging.getLogger(__name__)
 
 
-class _TqdmHandler(logging.Handler):
-    def emit(self, record):
-        try:
-            tqdm.write(self.format(record), file=sys.stderr)
-        except Exception:
-            self.handleError(record)
-
 
 def _sigint_handler(_sig, _frame):
     try:
@@ -257,7 +250,7 @@ if __name__ == "__main__":
     parser.add_argument("--backoff", type=float, default=2.0, help="Initial backoff in seconds, doubled each retry (default: 2.0)")
     parser.add_argument("--no-pdf", action="store_true", help="Skip PDF generation after downloading")
     parser.add_argument("--pdf-only", action="store_true", help="Skip downloading and only build PDF from existing images")
-    parser.add_argument("--quiet", "-q", action="store_true", help="Suppress per-page messages in terminal")
+    parser.add_argument("--quiet", "-q", action="store_true", help="Suppress progress bars")
     parser.add_argument("--log-file", help="Write log output to this file")
     parser.add_argument("--browser",
                         choices=["chrome", "firefox", "edge", "brave",
@@ -267,21 +260,12 @@ if __name__ == "__main__":
     parser.add_argument("--cookie-file", help="Path to a Netscape-format cookie file")
     args = parser.parse_args()
 
-    log_format = "%(asctime)s %(levelname)s %(message)s"
-    formatter = logging.Formatter(log_format)
-
-    tqdm_handler = _TqdmHandler()
-    tqdm_handler.setFormatter(formatter)
-    if args.quiet:
-        tqdm_handler.setLevel(logging.CRITICAL + 1)  # suppress all terminal output
-
-    handlers: list[logging.Handler] = [tqdm_handler]
     if args.log_file:
-        file_handler = logging.FileHandler(args.log_file)
-        file_handler.setFormatter(formatter)
-        handlers.append(file_handler)
-
-    logging.basicConfig(level=logging.INFO, handlers=handlers, force=True)
+        handler = logging.FileHandler(args.log_file)
+        handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+        logging.basicConfig(level=logging.INFO, handlers=[handler], force=True)
+    else:
+        logging.disable(logging.CRITICAL)
 
     base_url = args.url.rstrip('/')
     base_name = base_url.rsplit('/', 1)[1]
