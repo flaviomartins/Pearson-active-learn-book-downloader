@@ -1,11 +1,12 @@
 import re
+import io
 import time
 import random
 import argparse
 import httpx
 import pikepdf
 from pathlib import Path
-from PIL import Image, UnidentifiedImageError
+from PIL import Image
 
 HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
            " AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -17,15 +18,11 @@ COLORSPACE_MAP = {
     'L':    pikepdf.Name.DeviceGray,
 }
 
-MAX_RETRIES = 3
-RETRY_BACKOFF = 2  # seconds, doubled on each attempt
-
 
 def new_name(title):
     # '/ \ : * ? " < > |'
     rstr = r"[\/\\\:\*\?\"\<\>\|\%\=\@\!\@\#\$\%\%\^\&\*\(\)\+\|\`\~]"
-    new_doc_name = re.sub(rstr, "_", title)  # 替换为下划线
-    return new_doc_name
+    return re.sub(rstr, "_", title)  # 替换为下划线
 
 
 def is_valid_jpeg(path):
@@ -33,20 +30,20 @@ def is_valid_jpeg(path):
         with Image.open(path) as img:
             img.verify()
         return True
-    except (UnidentifiedImageError, Exception):
+    except (OSError, SyntaxError):
         return False
 
 
-def fetch_with_retry(client, url, delay):
+def fetch_with_retry(client, url, delay, max_retries, backoff):
     """Fetch url, retrying on 429 and transient errors with exponential backoff."""
-    for attempt in range(1, MAX_RETRIES + 1):
+    for attempt in range(1, max_retries + 1):
         try:
             response = client.get(url)
         except (httpx.TimeoutException, httpx.ReadError, httpx.ConnectError) as e:
-            if attempt == MAX_RETRIES:
+            if attempt == max_retries:
                 raise
-            wait = RETRY_BACKOFF * 2 ** (attempt - 1)
-            print(f"Network error ({e.__class__.__name__}), retrying in {wait}s ({attempt}/{MAX_RETRIES})...")
+            wait = backoff * 2 ** (attempt - 1)
+            print(f"Network error ({e.__class__.__name__}), retrying in {wait}s ({attempt}/{max_retries})...")
             time.sleep(wait)
             continue
 
@@ -57,10 +54,10 @@ def fetch_with_retry(client, url, delay):
             continue
 
         if response.status_code in (500, 502, 503, 504):
-            if attempt == MAX_RETRIES:
+            if attempt == max_retries:
                 return response
-            wait = RETRY_BACKOFF * 2 ** (attempt - 1)
-            print(f"Server error {response.status_code}, retrying in {wait}s ({attempt}/{MAX_RETRIES})...")
+            wait = backoff * 2 ** (attempt - 1)
+            print(f"Server error {response.status_code}, retrying in {wait}s ({attempt}/{max_retries})...")
             time.sleep(wait)
             continue
 
@@ -77,11 +74,10 @@ def img2pdf(img_path, name, num, output):
         num_str = str(i).rjust(3, '0')
         img_file = img_path / f"{name}-{num_str}.jpg"
 
-        with Image.open(img_file) as img:
+        jpeg_data = img_file.read_bytes()
+        with Image.open(io.BytesIO(jpeg_data)) as img:
             w, h = img.size
             colorspace = COLORSPACE_MAP.get(img.mode, pikepdf.Name.DeviceRGB)
-
-        jpeg_data = img_file.read_bytes()
 
         image_xobj = pikepdf.Stream(pdf, jpeg_data)
         image_xobj.stream_dict = pikepdf.Dictionary(
@@ -114,6 +110,9 @@ if __name__ == "__main__":
     parser.add_argument("--output", "-o", help="Output PDF path (default: <img_path>/<name>.pdf)")
     parser.add_argument("--start", "-s", type=int, default=1, help="Start from this page number (default: 1)")
     parser.add_argument("--delay", "-d", type=float, default=0.5, help="Delay in seconds between requests (default: 0.5)")
+    parser.add_argument("--retries", type=int, default=3, help="Max retries on transient errors (default: 3)")
+    parser.add_argument("--backoff", type=float, default=2.0, help="Initial backoff in seconds, doubled each retry (default: 2.0)")
+    parser.add_argument("--no-pdf", action="store_true", help="Skip PDF generation after downloading")
     args = parser.parse_args()
 
     print('Welcome to use this tool,this tool can help you download pearson active book easily.\n'
@@ -126,16 +125,17 @@ if __name__ == "__main__":
           '(This tool writen by RedSTAR.This tool was open source in Github,link is https://github.com/RedSTARO/Pearson-active-book-downloader .)\n')
 
     base_url = args.url.rstrip('/')
-    img_path = Path("download") / base_url.rsplit('/', 1)[1]
+    base_name = base_url.rsplit('/', 1)[1]
+    img_path = Path("download") / base_name
     img_path.mkdir(parents=True, exist_ok=True)
-    output = Path(args.output) if args.output else img_path / f"{img_path.name}.pdf"
+    output = Path(args.output) if args.output else img_path / f"{base_name}.pdf"
 
     num_pdf = args.start
+    pages_downloaded = 0
     with httpx.Client(headers=HEADERS, follow_redirects=True, timeout=30) as client:
         for i in range(args.start, 1001):
             num = str(i).rjust(3, '0')
             in_url = base_url + f"-{num}.jpg"
-
             doc_name = new_name(in_url.rsplit('/', 1)[1])
             if len(doc_name) > 250:
                 doc_name = "The file has been renamed,because original file namois too long. Now name:" + Path(doc_name).suffix
@@ -146,11 +146,11 @@ if __name__ == "__main__":
                 num_pdf = i + 1
                 continue
 
-            print(f"Downloading page {num}: {in_url}")
+            print(f"[{i}] Downloading: {in_url}")
             try:
-                response = fetch_with_retry(client, in_url, args.delay)
+                response = fetch_with_retry(client, in_url, args.delay, args.retries, args.backoff)
             except (httpx.TimeoutException, httpx.ReadError, httpx.ConnectError) as e:
-                print(f"Download {doc_name} failed after {MAX_RETRIES} attempts ({e.__class__.__name__}). Skipping.")
+                print(f"Download {doc_name} failed after {args.retries} attempts ({e.__class__.__name__}). Skipping.")
                 continue
 
             if response.status_code == 404:
@@ -170,6 +170,9 @@ if __name__ == "__main__":
             tmp = dest.with_suffix(".tmp")
             tmp.write_bytes(response.content)
             tmp.rename(dest)
-            print(f"Downloaded {doc_name}")
+            pages_downloaded += 1
+            print(f"[{i}] Saved {doc_name} ({pages_downloaded} downloaded this session)")
 
-    img2pdf(img_path, doc_name.rsplit('-', 1)[0], num_pdf, output)
+    if not args.no_pdf:
+        img2pdf(img_path, base_name, num_pdf, output)
+        print(f"PDF saved to {output}")
