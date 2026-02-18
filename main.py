@@ -1,5 +1,6 @@
 import re
 import time
+import random
 import argparse
 import httpx
 import pikepdf
@@ -64,7 +65,7 @@ def fetch_with_retry(client, url, delay):
             continue
 
         if delay:
-            time.sleep(delay)
+            time.sleep(delay * (0.5 + random.random()))
         return response
 
     return response
