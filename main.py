@@ -271,7 +271,7 @@ if __name__ == "__main__":
         file_handler.setFormatter(formatter)
         handlers.append(file_handler)
 
-    logging.basicConfig(level=logging.INFO, handlers=handlers)
+    logging.basicConfig(level=logging.INFO, handlers=handlers, force=True)
 
     base_url = args.url.rstrip('/')
     base_name = base_url.rsplit('/', 1)[1]
