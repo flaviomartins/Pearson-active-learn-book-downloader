@@ -46,7 +46,7 @@ def load_cookies(cookie_str=None, cookie_file=None, browser=None):
     if browser:
         try:
             import browser_cookie3
-            jar = getattr(browser_cookie3, browser)(domain_name='pearsonactivelearn.com')
+            jar = getattr(browser_cookie3, browser)(domain_name='www.pearsonactivelearn.com')
             cookies.update({c.name: c.value for c in jar})
         except ImportError:
             log.error("browser-cookie3 is not installed. Run: pip install browser-cookie3")
