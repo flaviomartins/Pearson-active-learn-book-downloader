@@ -28,8 +28,6 @@ COLORSPACE_MAP = {
 PDF_BATCH_SIZE = 50
 MAX_CONSECUTIVE_FAILURES = 10
 
-_SANITIZE_RE = re.compile(r"[\/\\\:\*\?\"\<\>\|\%\=\@\!\@\#\$\%\%\^\&\*\(\)\+\|\`\~]")
-
 
 def load_cookies(cookie_str=None, cookie_file=None):
     """Return a dict of cookies from a header string and/or a Netscape cookie file."""
@@ -74,12 +72,6 @@ def _track_tmp(path):
         yield path
     finally:
         _current_tmp = None
-
-
-def new_name(title):
-    stem = Path(title).stem
-    suffix = Path(title).suffix
-    return _SANITIZE_RE.sub("_", stem) + suffix  # 替换为下划线
 
 
 def is_valid_jpeg(path):
@@ -244,8 +236,9 @@ if __name__ == "__main__":
     signal.signal(signal.SIGINT, _sigint_handler)
 
     if args.pdf_only:
-        existing_files = sorted(f for f in img_path.glob(f"{base_name}-*.jpg") if is_valid_jpeg(f))
-        num_pdf = len(existing_files) + 1
+        nums = [int(m.group(1)) for f in img_path.glob(f"{base_name}-*.jpg")
+                if is_valid_jpeg(f) and (m := re.search(r"-(\d+)\.jpg$", f.name))]
+        num_pdf = max(nums) + 1 if nums else 1
     else:
         num_pdf = args.start
         total = args.pages if args.pages else None
@@ -256,9 +249,7 @@ if __name__ == "__main__":
                 for i in itertools.count(args.start):
                     num = str(i).rjust(3, '0')
                     in_url = base_url + f"-{num}.jpg"
-                    doc_name = new_name(in_url.rsplit('/', 1)[1])
-                    if len(doc_name) > 250:
-                        doc_name = f"page_{num}.jpg"
+                    doc_name = f"{base_name}-{num}.jpg"
 
                     dest = img_path / doc_name
                     if is_valid_jpeg(dest):
@@ -307,6 +298,7 @@ if __name__ == "__main__":
                             continue
 
                         tmp.rename(dest)
+                        num_pdf = i + 1
                         consecutive_failures = 0
                         pbar.update(1)
 
