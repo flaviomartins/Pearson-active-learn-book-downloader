@@ -2,6 +2,7 @@ import re
 import io
 import time
 import random
+import signal
 import argparse
 import httpx
 import pikepdf
@@ -19,6 +20,15 @@ COLORSPACE_MAP = {
     'L':    pikepdf.Name.DeviceGray,
 }
 
+_current_tmp: Path | None = None
+
+
+def _sigint_handler(sig, frame):
+    if _current_tmp and _current_tmp.exists():
+        _current_tmp.unlink()
+        tqdm.write(f"Interrupted. Removed incomplete file: {_current_tmp}")
+    raise SystemExit(1)
+
 
 def new_name(title):
     # '/ \ : * ? " < > |'
@@ -35,7 +45,7 @@ def is_valid_jpeg(path):
         return False
 
 
-def fetch_with_retry(client, url, delay, max_retries, backoff):
+def fetch_with_retry(client, url, max_retries, backoff):
     """Fetch url, retrying on 429 and transient errors with exponential backoff."""
     for attempt in range(1, max_retries + 1):
         try:
@@ -62,20 +72,23 @@ def fetch_with_retry(client, url, delay, max_retries, backoff):
             time.sleep(wait)
             continue
 
-        if delay:
-            time.sleep(delay * (0.5 + random.random()))
         return response
 
     return response
 
 
-def img2pdf(img_path, name, num, output):
+def img2pdf(img_path, name, num, output, quiet):
     pdf = pikepdf.Pdf.new()
-    for i in tqdm(range(1, num), desc="Building PDF", unit="page"):
+    for i in tqdm(range(1, num), desc="Building PDF", unit="page", disable=quiet):
         num_str = str(i).rjust(3, '0')
         img_file = img_path / f"{name}-{num_str}.jpg"
 
-        jpeg_data = img_file.read_bytes()
+        try:
+            jpeg_data = img_file.read_bytes()
+        except FileNotFoundError:
+            tqdm.write(f"Warning: {img_file.name} not found, skipping page {i}.")
+            continue
+
         with Image.open(io.BytesIO(jpeg_data)) as img:
             w, h = img.size
             colorspace = COLORSPACE_MAP.get(img.mode, pikepdf.Name.DeviceRGB)
@@ -110,20 +123,24 @@ if __name__ == "__main__":
     parser.add_argument("url", help="Base image URL without the page suffix (e.g. .../images/9781292244778)")
     parser.add_argument("--output", "-o", help="Output PDF path (default: <img_path>/<name>.pdf)")
     parser.add_argument("--start", "-s", type=int, default=1, help="Start from this page number (default: 1)")
+    parser.add_argument("--pages", "-p", type=int, help="Expected total number of pages (enables ETA in progress bar)")
     parser.add_argument("--delay", "-d", type=float, default=0.5, help="Delay in seconds between requests (default: 0.5)")
     parser.add_argument("--retries", type=int, default=3, help="Max retries on transient errors (default: 3)")
     parser.add_argument("--backoff", type=float, default=2.0, help="Initial backoff in seconds, doubled each retry (default: 2.0)")
     parser.add_argument("--no-pdf", action="store_true", help="Skip PDF generation after downloading")
+    parser.add_argument("--pdf-only", action="store_true", help="Skip downloading and only build PDF from existing images")
+    parser.add_argument("--quiet", "-q", action="store_true", help="Suppress banner and per-page messages")
     args = parser.parse_args()
 
-    print('Welcome to use this tool,this tool can help you download pearson active book easily.\n'
-          'First,you should get a link which can download any page of book by using developer tool of your browser.\n'
-          'Like this :\n'
-          'If your link is "https://resources.pearsonactivelearn.com/r00/r0090/r009023/r00902341/current/OPS/images/9781292244778-001.jpg"\n'
-          'Then,after deal,you should input link like this "https://resources.pearsonactivelearn.com/r00/r0090/r009023/r00902341/current/OPS/images/9781292244778"\n'
-          'Easily understand,isn\'t ?\n'
-          'Now  enjoy this tool!\n'
-          '(This tool writen by RedSTAR.This tool was open source in Github,link is https://github.com/RedSTARO/Pearson-active-book-downloader .)\n')
+    if not args.quiet:
+        print('Welcome to use this tool,this tool can help you download pearson active book easily.\n'
+              'First,you should get a link which can download any page of book by using developer tool of your browser.\n'
+              'Like this :\n'
+              'If your link is "https://resources.pearsonactivelearn.com/r00/r0090/r009023/r00902341/current/OPS/images/9781292244778-001.jpg"\n'
+              'Then,after deal,you should input link like this "https://resources.pearsonactivelearn.com/r00/r0090/r009023/r00902341/current/OPS/images/9781292244778"\n'
+              'Easily understand,isn\'t ?\n'
+              'Now  enjoy this tool!\n'
+              '(This tool writen by RedSTAR.This tool was open source in Github,link is https://github.com/RedSTARO/Pearson-active-book-downloader .)\n')
 
     base_url = args.url.rstrip('/')
     base_name = base_url.rsplit('/', 1)[1]
@@ -131,49 +148,65 @@ if __name__ == "__main__":
     img_path.mkdir(parents=True, exist_ok=True)
     output = Path(args.output) if args.output else img_path / f"{base_name}.pdf"
 
-    num_pdf = args.start
-    with tqdm(desc="Downloading pages", unit="page", dynamic_ncols=True) as pbar:
-        with httpx.Client(headers=HEADERS, follow_redirects=True, timeout=30) as client:
-            for i in range(args.start, 1001):
-                num = str(i).rjust(3, '0')
-                in_url = base_url + f"-{num}.jpg"
-                doc_name = new_name(in_url.rsplit('/', 1)[1])
-                if len(doc_name) > 250:
-                    doc_name = "The file has been renamed,because original file namois too long. Now name:" + Path(doc_name).suffix
+    signal.signal(signal.SIGINT, _sigint_handler)
 
-                dest = img_path / doc_name
-                if dest.exists() and is_valid_jpeg(dest):
-                    tqdm.write(f"Skipping {doc_name} (already downloaded)")
-                    num_pdf = i + 1
+    if args.pdf_only:
+        existing = sorted(img_path.glob(f"{base_name}-*.jpg"))
+        num_pdf = len(existing) + 1
+    else:
+        num_pdf = args.start
+        total = args.pages if args.pages else None
+        with tqdm(desc="Downloading pages", unit="page", total=total, dynamic_ncols=True, disable=args.quiet) as pbar:
+            with httpx.Client(headers=HEADERS, follow_redirects=True, timeout=30) as client:
+                for i in range(args.start, 1001):
+                    num = str(i).rjust(3, '0')
+                    in_url = base_url + f"-{num}.jpg"
+                    doc_name = new_name(in_url.rsplit('/', 1)[1])
+                    if len(doc_name) > 250:
+                        doc_name = "The file has been renamed,because original file namois too long. Now name:" + Path(doc_name).suffix
+
+                    dest = img_path / doc_name
+                    if dest.exists() and is_valid_jpeg(dest):
+                        if not args.quiet:
+                            tqdm.write(f"Skipping {doc_name} (already downloaded)")
+                        num_pdf = i + 1
+                        pbar.update(1)
+                        continue
+
+                    if dest.exists():
+                        tqdm.write(f"Replacing corrupt file: {doc_name}")
+
+                    pbar.set_postfix_str(doc_name)
+                    try:
+                        response = fetch_with_retry(client, in_url, args.retries, args.backoff)
+                    except (httpx.TimeoutException, httpx.ReadError, httpx.ConnectError) as e:
+                        tqdm.write(f"Download {doc_name} failed after {args.retries} attempts ({e.__class__.__name__}). Skipping.")
+                        continue
+
+                    if response.status_code == 404:
+                        tqdm.write(f"Page {num} not found (404). Download finished. Packing into pdf...")
+                        num_pdf = i
+                        break
+
+                    if response.status_code != 200:
+                        tqdm.write(f"Unexpected status {response.status_code} for {doc_name}. Skipping.")
+                        continue
+
+                    content_type = response.headers.get("content-type", "")
+                    if not content_type.startswith("image/") or not response.content:
+                        tqdm.write(f"Invalid content for {doc_name} (content-type: {content_type}). Skipping.")
+                        continue
+
+                    tmp = dest.with_suffix(".tmp")
+                    _current_tmp = tmp
+                    tmp.write_bytes(response.content)
+                    tmp.rename(dest)
+                    _current_tmp = None
                     pbar.update(1)
-                    continue
 
-                pbar.set_postfix_str(doc_name)
-                try:
-                    response = fetch_with_retry(client, in_url, args.delay, args.retries, args.backoff)
-                except (httpx.TimeoutException, httpx.ReadError, httpx.ConnectError) as e:
-                    tqdm.write(f"Download {doc_name} failed after {args.retries} attempts ({e.__class__.__name__}). Skipping.")
-                    continue
-
-                if response.status_code == 404:
-                    tqdm.write(f"Page {num} not found (404). Download finished. Packing into pdf...")
-                    num_pdf = i
-                    break
-
-                if response.status_code != 200:
-                    tqdm.write(f"Unexpected status {response.status_code} for {doc_name}. Skipping.")
-                    continue
-
-                content_type = response.headers.get("content-type", "")
-                if not content_type.startswith("image/") or not response.content:
-                    tqdm.write(f"Invalid content for {doc_name} (content-type: {content_type}). Skipping.")
-                    continue
-
-                tmp = dest.with_suffix(".tmp")
-                tmp.write_bytes(response.content)
-                tmp.rename(dest)
-                pbar.update(1)
+                    if args.delay:
+                        time.sleep(args.delay * (0.5 + random.random()))
 
     if not args.no_pdf:
-        img2pdf(img_path, base_name, num_pdf, output)
+        img2pdf(img_path, base_name, num_pdf, output, args.quiet)
         print(f"PDF saved to {output}")

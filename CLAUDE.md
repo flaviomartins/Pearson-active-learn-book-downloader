@@ -9,7 +9,7 @@ A Python CLI tool for downloading Pearson Active Learning textbook images and co
 ## Dependencies
 
 ```bash
-pip install pikepdf Pillow httpx[http2]
+pip install pikepdf Pillow httpx[http2] tqdm
 ```
 
 Or via pyproject.toml:
@@ -36,9 +36,12 @@ python main.py https://www.pearsonactivelearn.com/.../images/iAL_EMC_Psychology_
 | `--output`/`-o` | `download/<name>/<name>.pdf` | Output PDF path |
 | `--start`/`-s` | `1` | Start from this page number (for resuming) |
 | `--delay`/`-d` | `0.5` | Delay in seconds between requests (with ±50% jitter) |
+| `--pages`/`-p` | — | Expected total pages (enables ETA in progress bar) |
 | `--retries` | `3` | Max retries on transient errors |
 | `--backoff` | `2.0` | Initial backoff in seconds, doubled each retry |
 | `--no-pdf` | off | Skip PDF generation after downloading |
+| `--pdf-only` | off | Skip downloading; build PDF from existing images |
+| `--quiet`/`-q` | off | Suppress banner and per-page messages |
 
 Images are saved to `download/<name>/` (created automatically). Downloads stop on a 404 response, after which `img2pdf()` is called automatically. Already-downloaded pages are skipped after JPEG integrity verification.
 
