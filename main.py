@@ -4,7 +4,7 @@ import argparse
 import httpx
 import pikepdf
 from pathlib import Path
-from PIL import Image
+from PIL import Image, UnidentifiedImageError
 
 HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
            " AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -16,12 +16,58 @@ COLORSPACE_MAP = {
     'L':    pikepdf.Name.DeviceGray,
 }
 
+MAX_RETRIES = 3
+RETRY_BACKOFF = 2  # seconds, doubled on each attempt
+
 
 def new_name(title):
     # '/ \ : * ? " < > |'
     rstr = r"[\/\\\:\*\?\"\<\>\|\%\=\@\!\@\#\$\%\%\^\&\*\(\)\+\|\`\~]"
     new_doc_name = re.sub(rstr, "_", title)  # 替换为下划线
     return new_doc_name
+
+
+def is_valid_jpeg(path):
+    try:
+        with Image.open(path) as img:
+            img.verify()
+        return True
+    except (UnidentifiedImageError, Exception):
+        return False
+
+
+def fetch_with_retry(client, url, delay):
+    """Fetch url, retrying on 429 and transient errors with exponential backoff."""
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            response = client.get(url)
+        except (httpx.TimeoutException, httpx.ReadError, httpx.ConnectError) as e:
+            if attempt == MAX_RETRIES:
+                raise
+            wait = RETRY_BACKOFF * 2 ** (attempt - 1)
+            print(f"Network error ({e.__class__.__name__}), retrying in {wait}s ({attempt}/{MAX_RETRIES})...")
+            time.sleep(wait)
+            continue
+
+        if response.status_code == 429:
+            retry_after = int(response.headers.get("Retry-After", 5))
+            print(f"Rate limited. Retrying in {retry_after}s...")
+            time.sleep(retry_after)
+            continue
+
+        if response.status_code in (500, 502, 503, 504):
+            if attempt == MAX_RETRIES:
+                return response
+            wait = RETRY_BACKOFF * 2 ** (attempt - 1)
+            print(f"Server error {response.status_code}, retrying in {wait}s ({attempt}/{MAX_RETRIES})...")
+            time.sleep(wait)
+            continue
+
+        if delay:
+            time.sleep(delay)
+        return response
+
+    return response
 
 
 def img2pdf(img_path, name, num, output):
@@ -64,7 +110,9 @@ def img2pdf(img_path, name, num, output):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Download a Pearson Active Learning book as a PDF.")
     parser.add_argument("url", help="Base image URL without the page suffix (e.g. .../images/9781292244778)")
-    parser.add_argument("--output", "-o", help="Output PDF path (default: <img_path>/combined.pdf)")
+    parser.add_argument("--output", "-o", help="Output PDF path (default: <img_path>/<name>.pdf)")
+    parser.add_argument("--start", "-s", type=int, default=1, help="Start from this page number (default: 1)")
+    parser.add_argument("--delay", "-d", type=float, default=0.5, help="Delay in seconds between requests (default: 0.5)")
     args = parser.parse_args()
 
     print('Welcome to use this tool,this tool can help you download pearson active book easily.\n'
@@ -81,8 +129,9 @@ if __name__ == "__main__":
     img_path.mkdir(parents=True, exist_ok=True)
     output = Path(args.output) if args.output else img_path / f"{img_path.name}.pdf"
 
+    num_pdf = args.start
     with httpx.Client(headers=HEADERS, follow_redirects=True, timeout=30) as client:
-        for i in range(1, 1001):
+        for i in range(args.start, 1001):
             num = str(i).rjust(3, '0')
             in_url = base_url + f"-{num}.jpg"
 
@@ -91,28 +140,35 @@ if __name__ == "__main__":
                 doc_name = "The file has been renamed,because original file namois too long. Now name:" + Path(doc_name).suffix
 
             dest = img_path / doc_name
-            if dest.exists():
+            if dest.exists() and is_valid_jpeg(dest):
                 print(f"Skipping {doc_name} (already downloaded)")
+                num_pdf = i + 1
                 continue
 
             print(f"Downloading page {num}: {in_url}")
             try:
-                while True:
-                    response = client.get(in_url)
-                    if response.status_code == 429:
-                        retry_after = int(response.headers.get("Retry-After", 5))
-                        print(f"Rate limited. Retrying in {retry_after}s...")
-                        time.sleep(retry_after)
-                        continue
-                    break
-                if response.status_code != 200:
-                    print(f"Get {doc_name} failed. Download finished. Packing into pdf...")
-                    num_pdf = i
-                    break
-                dest.write_bytes(response.content)
-                print(f"Downloaded {doc_name}")
-            except httpx.ConnectError:
-                print(f"Download {doc_name} failed! Please confirm your input.")
+                response = fetch_with_retry(client, in_url, args.delay)
+            except (httpx.TimeoutException, httpx.ReadError, httpx.ConnectError) as e:
+                print(f"Download {doc_name} failed after {MAX_RETRIES} attempts ({e.__class__.__name__}). Skipping.")
                 continue
+
+            if response.status_code == 404:
+                print(f"Page {num} not found (404). Download finished. Packing into pdf...")
+                num_pdf = i
+                break
+
+            if response.status_code != 200:
+                print(f"Unexpected status {response.status_code} for {doc_name}. Skipping.")
+                continue
+
+            content_type = response.headers.get("content-type", "")
+            if not content_type.startswith("image/") or not response.content:
+                print(f"Invalid content for {doc_name} (content-type: {content_type}). Skipping.")
+                continue
+
+            tmp = dest.with_suffix(".tmp")
+            tmp.write_bytes(response.content)
+            tmp.rename(dest)
+            print(f"Downloaded {doc_name}")
 
     img2pdf(img_path, doc_name.rsplit('-', 1)[0], num_pdf, output)
