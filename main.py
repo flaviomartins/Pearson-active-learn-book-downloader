@@ -1,7 +1,7 @@
-import os
 import re
 import httpx
 import pikepdf
+from pathlib import Path
 from PIL import Image
 
 headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
@@ -31,23 +31,17 @@ def new_name(title):
     return new_doc_name
 
 
-def get_file_extension(filename):
-    arr = os.path.splitext(filename)
-    return arr[len(arr) - 1]
-
-
 def img2pdf(name, num):
     pdf = pikepdf.Pdf.new()
     for i in range(1, num):
         num_str = str(i).rjust(3, '0')
-        img_file = img_path + f"{name}_{num_str}.jpg"
+        img_file = img_path / f"{name}_{num_str}.jpg"
 
         with Image.open(img_file) as img:
             w, h = img.size
             colorspace = colorspace_map.get(img.mode, pikepdf.Name.DeviceRGB)
 
-        with open(img_file, 'rb') as f:
-            jpeg_data = f.read()
+        jpeg_data = img_file.read_bytes()
 
         image_xobj = pikepdf.Stream(pdf, jpeg_data)
         image_xobj.stream_dict = pikepdf.Dictionary(
@@ -74,20 +68,20 @@ def img2pdf(name, num):
     pdf.save('combined.pdf')
 
 
-img_path = ".\\download\\"
+base_url = input("Please input link without 001.jpg: ")
+img_path = Path("download") / base_url.rstrip('/').rsplit('/', 1)[1]
 
 with httpx.Client(headers=headers, follow_redirects=True) as client:
     for i in range(1,1001):
         num = str(i).rjust(3,'0')
         print(f"Continuous files downloader for pearson active book:task {num}")
-        in_url = input("Please input link with out 001.jpg: ") + f"{str(num)}.jpg"
+        in_url = base_url + f"{num}.jpg"
         print(in_url)
 
         doc_name = in_url.rsplit('/', 1)[1]
         doc_name = new_name(doc_name)
-        doc_file = get_file_extension(doc_name)
         if len(doc_name) > 250:
-            doc_name = "The file has been renamed,because original file namois too long. Now name:" + str(doc_file)
+            doc_name = "The file has been renamed,because original file namois too long. Now name:" + Path(doc_name).suffix
         try:
             response = client.get(str(in_url))
             r = response.content
@@ -96,9 +90,8 @@ with httpx.Client(headers=headers, follow_redirects=True) as client:
                 num_pdf = int(num)
                 break
             else:
-                with open(".\\download\\" + str(doc_name), "wb") as f:
-                    print("Code:" + str(response.status_code))
-                    f.write(r)
+                (img_path / doc_name).write_bytes(r)
+                print("Code:" + str(response.status_code))
         except httpx.ConnectError:
             print(f"Download {doc_name} failed！Please confirm your input.")
         if response.status_code == 200:
