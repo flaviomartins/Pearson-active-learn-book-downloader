@@ -10,6 +10,7 @@ dependencies = [
     "pikepdf>=8.0.0",
     "Pillow>=10.0.0",
     "httpx[http2]>=0.27.0",
+    "tqdm>=4.66.0",
 ]
 
 [project.scripts]

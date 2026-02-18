@@ -7,6 +7,7 @@ import httpx
 import pikepdf
 from pathlib import Path
 from PIL import Image
+from tqdm import tqdm
 
 HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
            " AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -43,13 +44,13 @@ def fetch_with_retry(client, url, delay, max_retries, backoff):
             if attempt == max_retries:
                 raise
             wait = backoff * 2 ** (attempt - 1)
-            print(f"Network error ({e.__class__.__name__}), retrying in {wait}s ({attempt}/{max_retries})...")
+            tqdm.write(f"Network error ({e.__class__.__name__}), retrying in {wait}s ({attempt}/{max_retries})...")
             time.sleep(wait)
             continue
 
         if response.status_code == 429:
             retry_after = int(response.headers.get("Retry-After", 5))
-            print(f"Rate limited. Retrying in {retry_after}s...")
+            tqdm.write(f"Rate limited. Retrying in {retry_after}s...")
             time.sleep(retry_after)
             continue
 
@@ -57,7 +58,7 @@ def fetch_with_retry(client, url, delay, max_retries, backoff):
             if attempt == max_retries:
                 return response
             wait = backoff * 2 ** (attempt - 1)
-            print(f"Server error {response.status_code}, retrying in {wait}s ({attempt}/{max_retries})...")
+            tqdm.write(f"Server error {response.status_code}, retrying in {wait}s ({attempt}/{max_retries})...")
             time.sleep(wait)
             continue
 
@@ -70,7 +71,7 @@ def fetch_with_retry(client, url, delay, max_retries, backoff):
 
 def img2pdf(img_path, name, num, output):
     pdf = pikepdf.Pdf.new()
-    for i in range(1, num):
+    for i in tqdm(range(1, num), desc="Building PDF", unit="page"):
         num_str = str(i).rjust(3, '0')
         img_file = img_path / f"{name}-{num_str}.jpg"
 
@@ -131,47 +132,47 @@ if __name__ == "__main__":
     output = Path(args.output) if args.output else img_path / f"{base_name}.pdf"
 
     num_pdf = args.start
-    pages_downloaded = 0
-    with httpx.Client(headers=HEADERS, follow_redirects=True, timeout=30) as client:
-        for i in range(args.start, 1001):
-            num = str(i).rjust(3, '0')
-            in_url = base_url + f"-{num}.jpg"
-            doc_name = new_name(in_url.rsplit('/', 1)[1])
-            if len(doc_name) > 250:
-                doc_name = "The file has been renamed,because original file namois too long. Now name:" + Path(doc_name).suffix
+    with tqdm(desc="Downloading pages", unit="page", dynamic_ncols=True) as pbar:
+        with httpx.Client(headers=HEADERS, follow_redirects=True, timeout=30) as client:
+            for i in range(args.start, 1001):
+                num = str(i).rjust(3, '0')
+                in_url = base_url + f"-{num}.jpg"
+                doc_name = new_name(in_url.rsplit('/', 1)[1])
+                if len(doc_name) > 250:
+                    doc_name = "The file has been renamed,because original file namois too long. Now name:" + Path(doc_name).suffix
 
-            dest = img_path / doc_name
-            if dest.exists() and is_valid_jpeg(dest):
-                print(f"Skipping {doc_name} (already downloaded)")
-                num_pdf = i + 1
-                continue
+                dest = img_path / doc_name
+                if dest.exists() and is_valid_jpeg(dest):
+                    tqdm.write(f"Skipping {doc_name} (already downloaded)")
+                    num_pdf = i + 1
+                    pbar.update(1)
+                    continue
 
-            print(f"[{i}] Downloading: {in_url}")
-            try:
-                response = fetch_with_retry(client, in_url, args.delay, args.retries, args.backoff)
-            except (httpx.TimeoutException, httpx.ReadError, httpx.ConnectError) as e:
-                print(f"Download {doc_name} failed after {args.retries} attempts ({e.__class__.__name__}). Skipping.")
-                continue
+                pbar.set_postfix_str(doc_name)
+                try:
+                    response = fetch_with_retry(client, in_url, args.delay, args.retries, args.backoff)
+                except (httpx.TimeoutException, httpx.ReadError, httpx.ConnectError) as e:
+                    tqdm.write(f"Download {doc_name} failed after {args.retries} attempts ({e.__class__.__name__}). Skipping.")
+                    continue
 
-            if response.status_code == 404:
-                print(f"Page {num} not found (404). Download finished. Packing into pdf...")
-                num_pdf = i
-                break
+                if response.status_code == 404:
+                    tqdm.write(f"Page {num} not found (404). Download finished. Packing into pdf...")
+                    num_pdf = i
+                    break
 
-            if response.status_code != 200:
-                print(f"Unexpected status {response.status_code} for {doc_name}. Skipping.")
-                continue
+                if response.status_code != 200:
+                    tqdm.write(f"Unexpected status {response.status_code} for {doc_name}. Skipping.")
+                    continue
 
-            content_type = response.headers.get("content-type", "")
-            if not content_type.startswith("image/") or not response.content:
-                print(f"Invalid content for {doc_name} (content-type: {content_type}). Skipping.")
-                continue
+                content_type = response.headers.get("content-type", "")
+                if not content_type.startswith("image/") or not response.content:
+                    tqdm.write(f"Invalid content for {doc_name} (content-type: {content_type}). Skipping.")
+                    continue
 
-            tmp = dest.with_suffix(".tmp")
-            tmp.write_bytes(response.content)
-            tmp.rename(dest)
-            pages_downloaded += 1
-            print(f"[{i}] Saved {doc_name} ({pages_downloaded} downloaded this session)")
+                tmp = dest.with_suffix(".tmp")
+                tmp.write_bytes(response.content)
+                tmp.rename(dest)
+                pbar.update(1)
 
     if not args.no_pdf:
         img2pdf(img_path, base_name, num_pdf, output)
