@@ -14,7 +14,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-browser = ["rookiepy"]
+browser = ["browser-cookie3"]
 
 [project.scripts]
 pearson-downloader = "pearson_active_book_downloader.main:main"

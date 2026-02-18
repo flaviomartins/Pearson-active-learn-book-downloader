@@ -15,14 +15,14 @@ pip install pikepdf Pillow httpx[http2] tqdm
 With browser cookie extraction support:
 
 ```bash
-pip install pikepdf Pillow httpx[http2] tqdm rookiepy
+pip install pikepdf Pillow httpx[http2] tqdm browser-cookie3
 ```
 
 Or via pyproject.toml:
 
 ```bash
 pip install -e .           # core deps
-pip install -e ".[browser]"  # with rookiepy
+pip install -e ".[browser]"  # with browser-cookie3
 ```
 
 ## Running
@@ -50,7 +50,7 @@ python main.py https://www.pearsonactivelearn.com/.../images/iAL_EMC_Psychology_
 | `--pdf-only` | off | Skip downloading; build PDF from existing images |
 | `--quiet`/`-q` | off | Suppress per-page messages in terminal (log file unaffected) |
 | `--log-file` | — | Write log output to this file |
-| `--browser` | — | Auto-extract cookies from this browser (`chrome`, `firefox`, `safari`, `edge`, `brave`, `chromium`, `opera`, `vivaldi`, `librewolf`); requires `rookiepy` |
+| `--browser` | — | Auto-extract cookies from this browser (`chrome`, `firefox`, `edge`, `brave`, `chromium`, `opera`, `opera_gx`, `vivaldi`, `librewolf`); requires `browser-cookie3` |
 | `--cookies` | — | Cookie header string (e.g. `'key=value; key2=value2'`) |
 | `--cookie-file` | — | Path to a Netscape-format cookie file |
 
@@ -62,7 +62,7 @@ The site requires a login. Before the download loop starts, a pre-flight probe c
 
 Three ways to authenticate (can be combined; later sources override earlier ones):
 
-1. `--browser chrome` — rookiepy reads live session cookies from the browser; no manual steps needed as long as you are already logged in.
+1. `--browser chrome` — browser-cookie3 reads live session cookies from the browser; no manual steps needed as long as you are already logged in.
 2. `--cookie-file cookies.txt` — Netscape-format file exported by a browser extension such as *Get cookies.txt LOCALLY* (Chrome/Firefox).
 3. `--cookies 'k=v; ...'` — paste the `Cookie` header value from DevTools → Network → request headers.
 

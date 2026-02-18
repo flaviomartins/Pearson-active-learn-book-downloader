@@ -34,11 +34,11 @@ def load_cookies(cookie_str=None, cookie_file=None, browser=None):
     cookies = {}
     if browser:
         try:
-            import rookiepy
-            jar = getattr(rookiepy, browser)(["pearsonactivelearn.com"])
+            import browser_cookie3
+            jar = getattr(browser_cookie3, browser)(domain_name='pearsonactivelearn.com')
             cookies.update({c.name: c.value for c in jar})
         except ImportError:
-            log.error("rookiepy is not installed. Run: pip install rookiepy")
+            log.error("browser-cookie3 is not installed. Run: pip install browser-cookie3")
             raise SystemExit(1)
     if cookie_str:
         for part in cookie_str.split(";"):
@@ -235,9 +235,9 @@ if __name__ == "__main__":
     parser.add_argument("--quiet", "-q", action="store_true", help="Suppress per-page messages in terminal")
     parser.add_argument("--log-file", help="Write log output to this file")
     parser.add_argument("--browser",
-                        choices=["chrome", "firefox", "safari", "edge", "brave",
-                                 "chromium", "opera", "vivaldi", "librewolf"],
-                        help="Auto-extract cookies from this browser (requires: pip install rookiepy)")
+                        choices=["chrome", "firefox", "edge", "brave",
+                                 "chromium", "opera", "opera_gx", "vivaldi", "librewolf"],
+                        help="Auto-extract cookies from this browser (requires: pip install browser-cookie3)")
     parser.add_argument("--cookies", help="Cookie string to send with requests (e.g. 'key=value; key2=value2')")
     parser.add_argument("--cookie-file", help="Path to a Netscape-format cookie file")
     args = parser.parse_args()
