@@ -9,6 +9,7 @@ import pikepdf
 from pathlib import Path
 from PIL import Image
 from tqdm import tqdm
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
            " AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -20,10 +21,12 @@ COLORSPACE_MAP = {
     'L':    pikepdf.Name.DeviceGray,
 }
 
+_SANITIZE_RE = re.compile(r"[\/\\\:\*\?\"\<\>\|\%\=\@\!\@\#\$\%\%\^\&\*\(\)\+\|\`\~]")
+
 _current_tmp: Path | None = None
 
 
-def _sigint_handler(sig, frame):
+def _sigint_handler(_sig, _frame):
     if _current_tmp and _current_tmp.exists():
         _current_tmp.unlink()
         tqdm.write(f"Interrupted. Removed incomplete file: {_current_tmp}")
@@ -31,9 +34,7 @@ def _sigint_handler(sig, frame):
 
 
 def new_name(title):
-    # '/ \ : * ? " < > |'
-    rstr = r"[\/\\\:\*\?\"\<\>\|\%\=\@\!\@\#\$\%\%\^\&\*\(\)\+\|\`\~]"
-    return re.sub(rstr, "_", title)  # 替换为下划线
+    return _SANITIZE_RE.sub("_", title)  # 替换为下划线
 
 
 def is_valid_jpeg(path):
@@ -45,53 +46,77 @@ def is_valid_jpeg(path):
         return False
 
 
-def fetch_with_retry(client, url, max_retries, backoff):
-    """Fetch url, retrying on 429 and transient errors with exponential backoff."""
+def fetch_with_retry(client, url, tmp_path, max_retries, backoff):
+    """Fetch url, streaming the body to tmp_path on success.
+
+    Returns (status_code, headers). On 200, tmp_path is written.
+    Raises on exhausted retries for network errors.
+    """
     for attempt in range(1, max_retries + 1):
         try:
-            response = client.get(url)
+            with client.stream("GET", url) as response:
+                status = response.status_code
+                headers = response.headers
+
+                if status == 429:
+                    response.read()
+                    retry_after = int(headers.get("Retry-After", 5))
+                    tqdm.write(f"Rate limited. Retrying in {retry_after}s...")
+                    time.sleep(retry_after)
+                    continue
+
+                if status in (500, 502, 503, 504):
+                    response.read()
+                    if attempt == max_retries:
+                        return status, headers
+                    wait = backoff * 2 ** (attempt - 1)
+                    tqdm.write(f"Server error {status}, retrying in {wait}s ({attempt}/{max_retries})...")
+                    time.sleep(wait)
+                    continue
+
+                if status == 200:
+                    with tmp_path.open("wb") as f:
+                        for chunk in response.iter_bytes(chunk_size=65536):
+                            f.write(chunk)
+
+                return status, headers
+
         except (httpx.TimeoutException, httpx.ReadError, httpx.ConnectError) as e:
             if attempt == max_retries:
                 raise
             wait = backoff * 2 ** (attempt - 1)
             tqdm.write(f"Network error ({e.__class__.__name__}), retrying in {wait}s ({attempt}/{max_retries})...")
             time.sleep(wait)
-            continue
 
-        if response.status_code == 429:
-            retry_after = int(response.headers.get("Retry-After", 5))
-            tqdm.write(f"Rate limited. Retrying in {retry_after}s...")
-            time.sleep(retry_after)
-            continue
+    return -1, {}
 
-        if response.status_code in (500, 502, 503, 504):
-            if attempt == max_retries:
-                return response
-            wait = backoff * 2 ** (attempt - 1)
-            tqdm.write(f"Server error {response.status_code}, retrying in {wait}s ({attempt}/{max_retries})...")
-            time.sleep(wait)
-            continue
 
-        return response
-
-    return response
+def _load_page(img_file):
+    """Read a JPEG file and return (path, jpeg_bytes, width, height, colorspace)."""
+    jpeg_data = img_file.read_bytes()
+    with Image.open(io.BytesIO(jpeg_data)) as img:
+        w, h = img.size
+        colorspace = COLORSPACE_MAP.get(img.mode, pikepdf.Name.DeviceRGB)
+    return img_file, jpeg_data, w, h, colorspace
 
 
 def img2pdf(img_path, name, num, output, quiet):
+    img_files = [img_path / f"{name}-{str(i).rjust(3, '0')}.jpg" for i in range(1, num)]
+    existing = [(i + 1, f) for i, f in enumerate(img_files) if f.exists()]
+
     pdf = pikepdf.Pdf.new()
-    for i in tqdm(range(1, num), desc="Building PDF", unit="page", disable=quiet):
-        num_str = str(i).rjust(3, '0')
-        img_file = img_path / f"{name}-{num_str}.jpg"
+    with ThreadPoolExecutor() as executor:
+        futures = {executor.submit(_load_page, f): page_num for page_num, f in existing}
+        results = {}
+        for future in tqdm(as_completed(futures), total=len(futures), desc="Loading images", unit="page", disable=quiet):
+            page_num = futures[future]
+            try:
+                results[page_num] = future.result()
+            except FileNotFoundError as e:
+                tqdm.write(f"Warning: {e.filename} not found, skipping.")
 
-        try:
-            jpeg_data = img_file.read_bytes()
-        except FileNotFoundError:
-            tqdm.write(f"Warning: {img_file.name} not found, skipping page {i}.")
-            continue
-
-        with Image.open(io.BytesIO(jpeg_data)) as img:
-            w, h = img.size
-            colorspace = COLORSPACE_MAP.get(img.mode, pikepdf.Name.DeviceRGB)
+    for page_num in tqdm(sorted(results), desc="Building PDF", unit="page", disable=quiet):
+        _, jpeg_data, w, h, colorspace = results[page_num]
 
         image_xobj = pikepdf.Stream(pdf, jpeg_data)
         image_xobj.stream_dict = pikepdf.Dictionary(
@@ -166,7 +191,7 @@ if __name__ == "__main__":
                         doc_name = "The file has been renamed,because original file namois too long. Now name:" + Path(doc_name).suffix
 
                     dest = img_path / doc_name
-                    if dest.exists() and is_valid_jpeg(dest):
+                    if is_valid_jpeg(dest):
                         if not args.quiet:
                             tqdm.write(f"Skipping {doc_name} (already downloaded)")
                         num_pdf = i + 1
@@ -177,29 +202,32 @@ if __name__ == "__main__":
                         tqdm.write(f"Replacing corrupt file: {doc_name}")
 
                     pbar.set_postfix_str(doc_name)
-                    try:
-                        response = fetch_with_retry(client, in_url, args.retries, args.backoff)
-                    except (httpx.TimeoutException, httpx.ReadError, httpx.ConnectError) as e:
-                        tqdm.write(f"Download {doc_name} failed after {args.retries} attempts ({e.__class__.__name__}). Skipping.")
-                        continue
-
-                    if response.status_code == 404:
-                        tqdm.write(f"Page {num} not found (404). Download finished. Packing into pdf...")
-                        num_pdf = i
-                        break
-
-                    if response.status_code != 200:
-                        tqdm.write(f"Unexpected status {response.status_code} for {doc_name}. Skipping.")
-                        continue
-
-                    content_type = response.headers.get("content-type", "")
-                    if not content_type.startswith("image/") or not response.content:
-                        tqdm.write(f"Invalid content for {doc_name} (content-type: {content_type}). Skipping.")
-                        continue
-
                     tmp = dest.with_suffix(".tmp")
                     _current_tmp = tmp
-                    tmp.write_bytes(response.content)
+                    try:
+                        status, headers = fetch_with_retry(client, in_url, tmp, args.retries, args.backoff)
+                    except (httpx.TimeoutException, httpx.ReadError, httpx.ConnectError) as e:
+                        tqdm.write(f"Download {doc_name} failed after {args.retries} attempts ({e.__class__.__name__}). Skipping.")
+                        _current_tmp = None
+                        continue
+
+                    if status == 404:
+                        tqdm.write(f"Page {num} not found (404). Download finished. Packing into pdf...")
+                        num_pdf = i
+                        _current_tmp = None
+                        break
+
+                    if status != 200:
+                        tqdm.write(f"Unexpected status {status} for {doc_name}. Skipping.")
+                        _current_tmp = None
+                        continue
+
+                    content_type = headers.get("content-type", "")
+                    if not content_type.startswith("image/") or not tmp.exists():
+                        tqdm.write(f"Invalid content for {doc_name} (content-type: {content_type}). Skipping.")
+                        _current_tmp = None
+                        continue
+
                     tmp.rename(dest)
                     _current_tmp = None
                     pbar.update(1)
