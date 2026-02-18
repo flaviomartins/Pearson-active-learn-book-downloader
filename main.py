@@ -15,9 +15,20 @@ from PIL import Image
 from tqdm import tqdm
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
-           " AppleWebKit/537.36 (KHTML, like Gecko) "
-           "Chrome/74.0.3729.169 Safari/537.36"}
+_FALLBACK_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/74.0.3729.169 Safari/537.36")
+
+try:
+    from fake_useragent import UserAgent as _UserAgent
+    _ua = _UserAgent(fallback=_FALLBACK_UA)
+except Exception:
+    _ua = None
+
+
+def _random_ua():
+    return _ua.random if _ua else _FALLBACK_UA
+
 
 COLORSPACE_MAP = {
     'RGB':  pikepdf.Name.DeviceRGB,
@@ -104,7 +115,7 @@ def fetch_with_retry(client, url, tmp_path, max_retries, backoff):
     """
     for attempt in range(1, max_retries + 1):
         try:
-            with client.stream("GET", url, follow_redirects=True) as response:
+            with client.stream("GET", url, headers={"User-Agent": _random_ua()}, follow_redirects=True) as response:
                 status = response.status_code
                 headers = response.headers
 
@@ -275,9 +286,9 @@ if __name__ == "__main__":
         total = args.pages if args.pages else None
         consecutive_failures = 0
         cookies = load_cookies(args.cookies, args.cookie_file, args.browser)
-        with httpx.Client(headers=HEADERS, cookies=cookies, follow_redirects=True, timeout=30) as client:
+        with httpx.Client(cookies=cookies, follow_redirects=True, timeout=30) as client:
             probe_url = base_url + f"-{str(args.start).rjust(3, '0')}.jpg"
-            with client.stream("GET", probe_url, follow_redirects=True) as r:
+            with client.stream("GET", probe_url, headers={"User-Agent": _random_ua()}, follow_redirects=True) as r:
                 r.read()
                 if r.status_code == 200 and Path(r.url.path).suffix.lower() not in _IMAGE_EXTS:
                     log.error(
