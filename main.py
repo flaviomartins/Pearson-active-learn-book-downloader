@@ -25,6 +25,7 @@ COLORSPACE_MAP = {
 }
 
 PDF_BATCH_SIZE = 50
+MAX_CONSECUTIVE_FAILURES = 10
 
 _SANITIZE_RE = re.compile(r"[\/\\\:\*\?\"\<\>\|\%\=\@\!\@\#\$\%\%\^\&\*\(\)\+\|\`\~]")
 
@@ -39,9 +40,12 @@ class _TqdmHandler(logging.StreamHandler):
 
 
 def _sigint_handler(_sig, _frame):
-    if _current_tmp and _current_tmp.exists():
-        _current_tmp.unlink()
-        log.warning(f"Interrupted. Removed incomplete file: {_current_tmp}")
+    try:
+        if _current_tmp and _current_tmp.exists():
+            _current_tmp.unlink()
+            log.warning(f"Interrupted. Removed incomplete file: {_current_tmp}")
+    except Exception:
+        pass
     raise SystemExit(1)
 
 
@@ -126,7 +130,7 @@ def _load_page(img_file):
 
 def img2pdf(img_path, name, num, output, quiet):
     img_files = [img_path / f"{name}-{str(i).rjust(3, '0')}.jpg" for i in range(1, num)]
-    existing = [(i + 1, f) for i, f in enumerate(img_files) if f.exists()]
+    existing = [(i + 1, f) for i, f in enumerate(img_files) if is_valid_jpeg(f)]
 
     pdf = pikepdf.Pdf.new()
     with tqdm(total=len(existing), desc="Building PDF", unit="page", disable=quiet) as pbar:
@@ -192,20 +196,25 @@ if __name__ == "__main__":
     parser.add_argument("--backoff", type=float, default=2.0, help="Initial backoff in seconds, doubled each retry (default: 2.0)")
     parser.add_argument("--no-pdf", action="store_true", help="Skip PDF generation after downloading")
     parser.add_argument("--pdf-only", action="store_true", help="Skip downloading and only build PDF from existing images")
-    parser.add_argument("--quiet", "-q", action="store_true", help="Suppress per-page messages")
+    parser.add_argument("--quiet", "-q", action="store_true", help="Suppress per-page messages in terminal")
     parser.add_argument("--log-file", help="Write log output to this file")
     args = parser.parse_args()
 
-    handlers: list[logging.Handler] = [_TqdmHandler()]
-    if args.log_file:
-        handlers.append(logging.FileHandler(args.log_file))
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(message)s",
-        handlers=handlers,
-    )
+    log_format = "%(asctime)s %(levelname)s %(message)s"
+    formatter = logging.Formatter(log_format)
+
+    tqdm_handler = _TqdmHandler()
+    tqdm_handler.setFormatter(formatter)
     if args.quiet:
-        logging.disable(logging.INFO)
+        tqdm_handler.setLevel(logging.CRITICAL + 1)  # suppress all terminal output
+
+    handlers: list[logging.Handler] = [tqdm_handler]
+    if args.log_file:
+        file_handler = logging.FileHandler(args.log_file)
+        file_handler.setFormatter(formatter)
+        handlers.append(file_handler)
+
+    logging.basicConfig(level=logging.INFO, handlers=handlers)
 
     base_url = args.url.rstrip('/')
     base_name = base_url.rsplit('/', 1)[1]
@@ -221,6 +230,7 @@ if __name__ == "__main__":
     else:
         num_pdf = args.start
         total = args.pages if args.pages else None
+        consecutive_failures = 0
         with tqdm(desc="Downloading pages", unit="page", total=total, dynamic_ncols=True, disable=args.quiet) as pbar:
             with httpx.Client(headers=HEADERS, follow_redirects=True, timeout=30) as client:
                 for i in itertools.count(args.start):
@@ -228,12 +238,13 @@ if __name__ == "__main__":
                     in_url = base_url + f"-{num}.jpg"
                     doc_name = new_name(in_url.rsplit('/', 1)[1])
                     if len(doc_name) > 250:
-                        doc_name = "The file has been renamed,because original file namois too long. Now name:" + Path(doc_name).suffix
+                        doc_name = f"page_{num}.jpg"
 
                     dest = img_path / doc_name
                     if is_valid_jpeg(dest):
                         log.info(f"Skipping {doc_name} (already downloaded)")
                         num_pdf = i + 1
+                        consecutive_failures = 0
                         pbar.update(1)
                         continue
 
@@ -247,6 +258,10 @@ if __name__ == "__main__":
                             status, headers = fetch_with_retry(client, in_url, tmp, args.retries, args.backoff)
                         except (httpx.TimeoutException, httpx.ReadError, httpx.ConnectError) as e:
                             log.error(f"Download {doc_name} failed after {args.retries} attempts ({e.__class__.__name__}). Skipping.")
+                            consecutive_failures += 1
+                            if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
+                                log.error(f"Aborting after {MAX_CONSECUTIVE_FAILURES} consecutive failures.")
+                                break
                             continue
 
                         if status == 404:
@@ -256,14 +271,23 @@ if __name__ == "__main__":
 
                         if status != 200:
                             log.warning(f"Unexpected status {status} for {doc_name}. Skipping.")
+                            consecutive_failures += 1
+                            if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
+                                log.error(f"Aborting after {MAX_CONSECUTIVE_FAILURES} consecutive failures.")
+                                break
                             continue
 
                         content_type = headers.get("content-type", "")
                         if not content_type.startswith("image/") or not tmp.exists():
                             log.warning(f"Invalid content for {doc_name} (content-type: {content_type}). Skipping.")
+                            consecutive_failures += 1
+                            if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
+                                log.error(f"Aborting after {MAX_CONSECUTIVE_FAILURES} consecutive failures.")
+                                break
                             continue
 
                         tmp.rename(dest)
+                        consecutive_failures = 0
                         pbar.update(1)
 
                     if args.delay:
