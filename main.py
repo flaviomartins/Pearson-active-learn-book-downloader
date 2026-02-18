@@ -202,9 +202,6 @@ def img2pdf(img_path, name, num, output, quiet):
                     ColorSpace=colorspace,
                     BitsPerComponent=8,
                     Filter=pikepdf.Name.DCTDecode,
-                    DecodeParms=pikepdf.Dictionary(
-                        ColorTransform=0
-                    ),
                     # prevents interpolation blur in some viewers
                     Interpolate=False,
                 )
