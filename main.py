@@ -83,10 +83,15 @@ def is_valid_jpeg(path):
         return False
 
 
+_IMAGE_EXTS = {'.jpg', '.jpeg', '.png', '.gif', '.webp'}
+
+
 def fetch_with_retry(client, url, tmp_path, max_retries, backoff):
     """Fetch url, streaming the body to tmp_path on success.
 
     Returns (status_code, headers). On 200, tmp_path is written.
+    Returns (302, headers) if the server redirected to a non-image URL
+    (indicates an auth redirect — caller should abort with a helpful message).
     Raises on exhausted retries for network errors.
     """
     for attempt in range(1, max_retries + 1):
@@ -112,6 +117,10 @@ def fetch_with_retry(client, url, tmp_path, max_retries, backoff):
                     continue
 
                 if status == 200:
+                    final_ext = Path(response.url.path).suffix.lower()
+                    if final_ext not in _IMAGE_EXTS:
+                        response.read()
+                        return 302, response.headers
                     with tmp_path.open("wb") as f:
                         for chunk in response.iter_bytes(chunk_size=65536):
                             f.write(chunk)
@@ -277,6 +286,15 @@ if __name__ == "__main__":
 
                         if status == 404:
                             log.info(f"Page {num} not found (404). Download finished. Packing into pdf...")
+                            num_pdf = i
+                            break
+
+                        if status == 302:
+                            log.error(
+                                "Server redirected the image request to a non-image URL — "
+                                "authentication is required. Pass session cookies via "
+                                "--cookies or --cookie-file."
+                            )
                             num_pdf = i
                             break
 
