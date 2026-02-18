@@ -1,5 +1,6 @@
 import re
 import io
+import sys
 import time
 import random
 import signal
@@ -70,7 +71,7 @@ log = logging.getLogger(__name__)
 
 class _TqdmHandler(logging.StreamHandler):
     def emit(self, record):
-        tqdm.write(self.format(record))
+        tqdm.write(self.format(record), file=sys.stderr)
 
 
 def _sigint_handler(_sig, _frame):
