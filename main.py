@@ -205,7 +205,7 @@ def img2pdf(img_path, name, num, output, quiet):
                 )
 
                 content = f'q {w} 0 0 {h} 0 0 cm /Im0 Do Q'.encode()
-                page = pdf.make_indirect(pikepdf.Dictionary(
+                page = pikepdf.Page(pikepdf.Dictionary(
                     Type=pikepdf.Name.Page,
                     MediaBox=pikepdf.Array([0, 0, w, h]),
                     Resources=pikepdf.Dictionary(
