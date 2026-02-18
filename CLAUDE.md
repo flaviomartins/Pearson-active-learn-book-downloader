@@ -21,11 +21,10 @@ pip install -e .
 ## Running
 
 ```bash
-cd "pearson active book downloader"
 python main.py
 ```
 
-The tool is interactive: it prompts for a base URL on each iteration, appending a zero-padded page number (e.g. `001.jpg`). The user must strip the page suffix from the URL before entering it. Downloads stop when a non-200 response is received, after which `combain2pdf.img2pdf()` is called automatically.
+The tool is interactive: it prompts for a base URL on each iteration, appending a zero-padded page number (e.g. `001.jpg`). The user must strip the page suffix from the URL before entering it. Downloads stop when a non-200 response is received, after which `img2pdf()` is called automatically.
 
 ## Architecture
 
