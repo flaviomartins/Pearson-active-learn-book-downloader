@@ -35,21 +35,23 @@ python main.py https://www.pearsonactivelearn.com/.../images/iAL_EMC_Psychology_
 | `url` | required | Base image URL without page suffix |
 | `--output`/`-o` | `download/<name>/<name>.pdf` | Output PDF path |
 | `--start`/`-s` | `1` | Start from this page number (for resuming) |
-| `--delay`/`-d` | `0.5` | Delay in seconds between requests (with ±50% jitter) |
 | `--pages`/`-p` | — | Expected total pages (enables ETA in progress bar) |
+| `--delay`/`-d` | `0.5` | Delay in seconds between requests (with ±50% jitter) |
 | `--retries` | `3` | Max retries on transient errors |
 | `--backoff` | `2.0` | Initial backoff in seconds, doubled each retry |
 | `--no-pdf` | off | Skip PDF generation after downloading |
 | `--pdf-only` | off | Skip downloading; build PDF from existing images |
-| `--quiet`/`-q` | off | Suppress banner and per-page messages |
+| `--quiet`/`-q` | off | Suppress per-page messages in terminal (log file unaffected) |
+| `--log-file` | — | Write log output to this file |
 
-Images are saved to `download/<name>/` (created automatically). Downloads stop on a 404 response, after which `img2pdf()` is called automatically. Already-downloaded pages are skipped after JPEG integrity verification.
+Images are saved to `download/<name>/` (created automatically). Downloads stop on a 404 response or after `MAX_CONSECUTIVE_FAILURES` (10) consecutive failures, after which `img2pdf()` is called automatically. Already-downloaded pages are skipped after JPEG integrity verification.
 
 ## Architecture
 
 Single script `main.py` with these functions:
 
-- **`new_name(title)`** — sanitizes filenames by replacing special characters with underscores, preserving dashes.
+- **`new_name(title)`** — sanitizes the filename stem by replacing special characters with underscores, preserving dashes and re-appending the suffix.
 - **`is_valid_jpeg(path)`** — validates a file is a readable JPEG using `Image.verify()`.
-- **`fetch_with_retry(client, url, delay, max_retries, backoff)`** — fetches a URL with retries and exponential backoff on transient network errors, 5xx responses, and 429 rate limits. Applies jitter (±50%) to the inter-request delay.
-- **`img2pdf(img_path, name, num, output)`** — iterates downloaded JPGs, embeds each as a DCTDecode image XObject in a pikepdf page, and saves the output PDF. Pillow is used to read image dimensions and colour mode (RGB/CMYK/grayscale).
+- **`fetch_with_retry(client, url, tmp_path, max_retries, backoff)`** — streams a URL to `tmp_path` with retries and exponential backoff on transient network errors, 5xx responses, and 429 rate limits.
+- **`_load_page(img_file)`** — reads a JPEG file and returns its bytes, dimensions, and pikepdf colorspace; used by `ThreadPoolExecutor` in `img2pdf`.
+- **`img2pdf(img_path, name, num, output, quiet)`** — builds a PDF by loading images in parallel batches (`PDF_BATCH_SIZE=50`) with `ThreadPoolExecutor`, embedding each as a DCTDecode image XObject in a pikepdf page.
