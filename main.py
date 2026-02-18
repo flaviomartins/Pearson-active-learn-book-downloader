@@ -69,9 +69,12 @@ _current_tmp: Path | None = None
 log = logging.getLogger(__name__)
 
 
-class _TqdmHandler(logging.StreamHandler):
+class _TqdmHandler(logging.Handler):
     def emit(self, record):
-        tqdm.write(self.format(record), file=sys.stderr)
+        try:
+            tqdm.write(self.format(record), file=sys.stderr)
+        except Exception:
+            self.handleError(record)
 
 
 def _sigint_handler(_sig, _frame):
@@ -147,7 +150,7 @@ def fetch_with_retry(client, url, tmp_path, max_retries, backoff, ua, quiet=Fals
                     content_length = int(headers.get("content-length", 0)) or None
                     with tqdm(total=content_length, unit="B", unit_scale=True,
                               unit_divisor=1024, desc=Path(url).name,
-                              leave=False, dynamic_ncols=True,
+                              leave=False, dynamic_ncols=True, file=sys.stderr,
                               position=1, disable=quiet) as dl_pbar:
                         with tmp_path.open("wb") as f:
                             for chunk in response.iter_bytes(chunk_size=65536):
@@ -181,7 +184,7 @@ def img2pdf(img_path, name, num, output, quiet):
     existing = [(i + 1, f) for i, f in enumerate(img_files) if is_valid_jpeg(f)]
 
     pdf = pikepdf.Pdf.new()
-    with tqdm(total=len(existing), desc="Building PDF", unit="page", disable=quiet) as pbar:
+    with tqdm(total=len(existing), desc="Building PDF", unit="page", disable=quiet, file=sys.stderr) as pbar:
         for batch_start in range(0, len(existing), PDF_BATCH_SIZE):
             batch = existing[batch_start:batch_start + PDF_BATCH_SIZE]
             with ThreadPoolExecutor() as executor:
@@ -308,7 +311,7 @@ if __name__ == "__main__":
                         "Use --browser, --cookie-file, or --cookies to authenticate."
                     )
                     raise SystemExit(1)
-            with tqdm(desc="Downloading pages", unit="page", total=total, dynamic_ncols=True, position=0, disable=args.quiet) as pbar:
+            with tqdm(desc="Downloading pages", unit="page", total=total, dynamic_ncols=True, position=0, disable=args.quiet, file=sys.stderr) as pbar:
                 for i in itertools.count(args.start):
                     num = str(i).rjust(3, '0')
                     in_url = base_url + f"-{num}.jpg"
