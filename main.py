@@ -6,6 +6,7 @@ import signal
 import logging
 import argparse
 import itertools
+import http.cookiejar
 import httpx
 import pikepdf
 from pathlib import Path
@@ -28,6 +29,22 @@ PDF_BATCH_SIZE = 50
 MAX_CONSECUTIVE_FAILURES = 10
 
 _SANITIZE_RE = re.compile(r"[\/\\\:\*\?\"\<\>\|\%\=\@\!\@\#\$\%\%\^\&\*\(\)\+\|\`\~]")
+
+
+def load_cookies(cookie_str=None, cookie_file=None):
+    """Return a dict of cookies from a header string and/or a Netscape cookie file."""
+    cookies = {}
+    if cookie_str:
+        for part in cookie_str.split(";"):
+            if "=" in part:
+                k, v = part.strip().split("=", 1)
+                cookies[k.strip()] = v.strip()
+    if cookie_file:
+        jar = http.cookiejar.MozillaCookieJar(cookie_file)
+        jar.load(ignore_discard=True, ignore_expires=True)
+        for cookie in jar:
+            cookies[cookie.name] = cookie.value
+    return cookies
 
 _current_tmp: Path | None = None
 
@@ -198,6 +215,8 @@ if __name__ == "__main__":
     parser.add_argument("--pdf-only", action="store_true", help="Skip downloading and only build PDF from existing images")
     parser.add_argument("--quiet", "-q", action="store_true", help="Suppress per-page messages in terminal")
     parser.add_argument("--log-file", help="Write log output to this file")
+    parser.add_argument("--cookies", help="Cookie string to send with requests (e.g. 'key=value; key2=value2')")
+    parser.add_argument("--cookie-file", help="Path to a Netscape-format cookie file")
     args = parser.parse_args()
 
     log_format = "%(asctime)s %(levelname)s %(message)s"
@@ -232,7 +251,8 @@ if __name__ == "__main__":
         total = args.pages if args.pages else None
         consecutive_failures = 0
         with tqdm(desc="Downloading pages", unit="page", total=total, dynamic_ncols=True, disable=args.quiet) as pbar:
-            with httpx.Client(headers=HEADERS, follow_redirects=True, timeout=30) as client:
+            cookies = load_cookies(args.cookies, args.cookie_file)
+            with httpx.Client(headers=HEADERS, cookies=cookies, follow_redirects=True, timeout=30) as client:
                 for i in itertools.count(args.start):
                     num = str(i).rjust(3, '0')
                     in_url = base_url + f"-{num}.jpg"
