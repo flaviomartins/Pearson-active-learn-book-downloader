@@ -105,7 +105,7 @@ def is_valid_jpeg(path):
 _IMAGE_EXTS = {'.jpg', '.jpeg', '.png', '.gif', '.webp'}
 
 
-def fetch_with_retry(client, url, tmp_path, max_retries, backoff):
+def fetch_with_retry(client, url, tmp_path, max_retries, backoff, ua):
     """Fetch url, streaming the body to tmp_path on success.
 
     Returns (status_code, headers). On 200, tmp_path is written.
@@ -115,7 +115,7 @@ def fetch_with_retry(client, url, tmp_path, max_retries, backoff):
     """
     for attempt in range(1, max_retries + 1):
         try:
-            with client.stream("GET", url, headers={"User-Agent": _random_ua()}, follow_redirects=True) as response:
+            with client.stream("GET", url, headers={"User-Agent": ua}, follow_redirects=True) as response:
                 status = response.status_code
                 headers = response.headers
 
@@ -286,9 +286,10 @@ if __name__ == "__main__":
         total = args.pages if args.pages else None
         consecutive_failures = 0
         cookies = load_cookies(args.cookies, args.cookie_file, args.browser)
+        session_ua = _random_ua()
         with httpx.Client(cookies=cookies, follow_redirects=True, timeout=30) as client:
             probe_url = base_url + f"-{str(args.start).rjust(3, '0')}.jpg"
-            with client.stream("GET", probe_url, headers={"User-Agent": _random_ua()}, follow_redirects=True) as r:
+            with client.stream("GET", probe_url, headers={"User-Agent": session_ua}, follow_redirects=True) as r:
                 r.read()
                 if r.status_code == 200 and Path(r.url.path).suffix.lower() not in _IMAGE_EXTS:
                     log.error(
@@ -317,7 +318,7 @@ if __name__ == "__main__":
                     tmp = dest.with_suffix(".tmp")
                     with _track_tmp(tmp):
                         try:
-                            status, headers = fetch_with_retry(client, in_url, tmp, args.retries, args.backoff)
+                            status, headers = fetch_with_retry(client, in_url, tmp, args.retries, args.backoff, session_ua)
                         except (httpx.TimeoutException, httpx.ReadError, httpx.ConnectError) as e:
                             log.error(f"Download {doc_name} failed after {args.retries} attempts ({e.__class__.__name__}). Skipping.")
                             consecutive_failures += 1
