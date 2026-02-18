@@ -202,21 +202,33 @@ def img2pdf(img_path, name, num, output, quiet):
                     ColorSpace=colorspace,
                     BitsPerComponent=8,
                     Filter=pikepdf.Name.DCTDecode,
+                    DecodeParms=pikepdf.Dictionary(
+                        ColorTransform=0
+                    ),
+                    # prevents interpolation blur in some viewers
+                    Interpolate=False,
                 )
 
                 content = f'q {w} 0 0 {h} 0 0 cm /Im0 Do Q'.encode()
+
+                im_ref = pdf.make_indirect(image_xobj)
+
                 page = pikepdf.Page(pikepdf.Dictionary(
                     Type=pikepdf.Name.Page,
                     MediaBox=pikepdf.Array([0, 0, w, h]),
                     Resources=pikepdf.Dictionary(
-                        XObject=pikepdf.Dictionary(Im0=pdf.make_indirect(image_xobj))
+                        XObject=pikepdf.Dictionary(Im0=im_ref)
                     ),
                     Contents=pdf.make_indirect(pikepdf.Stream(pdf, content)),
                 ))
                 pdf.pages.append(page)
                 pbar.update(1)
 
-    pdf.save(output)
+    pdf.save(
+        output,
+        compress_streams=True,
+        object_stream_mode=pikepdf.ObjectStreamMode.generate,
+    )
 
 
 if __name__ == "__main__":
