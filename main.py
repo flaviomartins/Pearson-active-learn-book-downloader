@@ -105,7 +105,7 @@ def is_valid_jpeg(path):
 _IMAGE_EXTS = {'.jpg', '.jpeg', '.png', '.gif', '.webp'}
 
 
-def fetch_with_retry(client, url, tmp_path, max_retries, backoff, ua):
+def fetch_with_retry(client, url, tmp_path, max_retries, backoff, ua, quiet=False):
     """Fetch url, streaming the body to tmp_path on success.
 
     Returns (status_code, headers). On 200, tmp_path is written.
@@ -143,9 +143,15 @@ def fetch_with_retry(client, url, tmp_path, max_retries, backoff, ua):
                     if final_ext not in _IMAGE_EXTS:
                         response.read()
                         return 302, response.headers
-                    with tmp_path.open("wb") as f:
-                        for chunk in response.iter_bytes(chunk_size=65536):
-                            f.write(chunk)
+                    content_length = int(headers.get("content-length", 0)) or None
+                    with tqdm(total=content_length, unit="B", unit_scale=True,
+                              unit_divisor=1024, desc=Path(url).name,
+                              leave=False, dynamic_ncols=True,
+                              position=1, disable=quiet) as dl_pbar:
+                        with tmp_path.open("wb") as f:
+                            for chunk in response.iter_bytes(chunk_size=65536):
+                                f.write(chunk)
+                                dl_pbar.update(len(chunk))
 
                 return status, headers
 
@@ -301,7 +307,7 @@ if __name__ == "__main__":
                         "Use --browser, --cookie-file, or --cookies to authenticate."
                     )
                     raise SystemExit(1)
-            with tqdm(desc="Downloading pages", unit="page", total=total, dynamic_ncols=True, disable=args.quiet) as pbar:
+            with tqdm(desc="Downloading pages", unit="page", total=total, dynamic_ncols=True, position=0, disable=args.quiet) as pbar:
                 for i in itertools.count(args.start):
                     num = str(i).rjust(3, '0')
                     in_url = base_url + f"-{num}.jpg"
@@ -322,7 +328,7 @@ if __name__ == "__main__":
                     tmp = dest.with_suffix(".tmp")
                     with _track_tmp(tmp):
                         try:
-                            status, headers = fetch_with_retry(client, in_url, tmp, args.retries, args.backoff, session_ua)
+                            status, headers = fetch_with_retry(client, in_url, tmp, args.retries, args.backoff, session_ua, args.quiet)
                         except (httpx.TimeoutException, httpx.ReadError, httpx.ConnectError) as e:
                             log.error(f"Download {doc_name} failed after {args.retries} attempts ({e.__class__.__name__}). Skipping.")
                             consecutive_failures += 1
