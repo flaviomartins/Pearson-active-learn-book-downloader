@@ -119,7 +119,17 @@ def img2pdf(img_path, name, num, output, quiet):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Download a Pearson Active Learning book as a PDF.")
+    parser = argparse.ArgumentParser(
+        description="Download a Pearson Active Learning book as a PDF.",
+        epilog=(
+            "Example:\n"
+            "  Strip the page suffix from a URL found in your browser's developer tools:\n"
+            "  https://resources.pearsonactivelearn.com/.../images/9781292244778-001.jpg\n"
+            "  becomes:\n"
+            "  %(prog)s https://resources.pearsonactivelearn.com/.../images/9781292244778"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     parser.add_argument("url", help="Base image URL without the page suffix (e.g. .../images/9781292244778)")
     parser.add_argument("--output", "-o", help="Output PDF path (default: <img_path>/<name>.pdf)")
     parser.add_argument("--start", "-s", type=int, default=1, help="Start from this page number (default: 1)")
@@ -131,16 +141,6 @@ if __name__ == "__main__":
     parser.add_argument("--pdf-only", action="store_true", help="Skip downloading and only build PDF from existing images")
     parser.add_argument("--quiet", "-q", action="store_true", help="Suppress banner and per-page messages")
     args = parser.parse_args()
-
-    if not args.quiet:
-        print('Welcome to use this tool,this tool can help you download pearson active book easily.\n'
-              'First,you should get a link which can download any page of book by using developer tool of your browser.\n'
-              'Like this :\n'
-              'If your link is "https://resources.pearsonactivelearn.com/r00/r0090/r009023/r00902341/current/OPS/images/9781292244778-001.jpg"\n'
-              'Then,after deal,you should input link like this "https://resources.pearsonactivelearn.com/r00/r0090/r009023/r00902341/current/OPS/images/9781292244778"\n'
-              'Easily understand,isn\'t ?\n'
-              'Now  enjoy this tool!\n'
-              '(This tool writen by RedSTAR.This tool was open source in Github,link is https://github.com/RedSTARO/Pearson-active-book-downloader .)\n')
 
     base_url = args.url.rstrip('/')
     base_name = base_url.rsplit('/', 1)[1]
