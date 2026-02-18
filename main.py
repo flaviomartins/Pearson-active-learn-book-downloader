@@ -29,9 +29,17 @@ PDF_BATCH_SIZE = 50
 MAX_CONSECUTIVE_FAILURES = 10
 
 
-def load_cookies(cookie_str=None, cookie_file=None):
-    """Return a dict of cookies from a header string and/or a Netscape cookie file."""
+def load_cookies(cookie_str=None, cookie_file=None, browser=None):
+    """Return a dict of cookies from a browser, a header string, and/or a Netscape cookie file."""
     cookies = {}
+    if browser:
+        try:
+            import rookiepy
+            jar = getattr(rookiepy, browser)(["pearsonactivelearn.com"])
+            cookies.update({c.name: c.value for c in jar})
+        except ImportError:
+            log.error("rookiepy is not installed. Run: pip install rookiepy")
+            raise SystemExit(1)
     if cookie_str:
         for part in cookie_str.split(";"):
             if "=" in part:
@@ -201,7 +209,17 @@ if __name__ == "__main__":
             "  Strip the page suffix from a URL found in your browser's developer tools:\n"
             "  https://resources.pearsonactivelearn.com/.../images/9781292244778-001.jpg\n"
             "  becomes:\n"
-            "  %(prog)s https://resources.pearsonactivelearn.com/.../images/9781292244778"
+            "  %(prog)s https://resources.pearsonactivelearn.com/.../images/9781292244778\n"
+            "\n"
+            "Authentication:\n"
+            "  The site requires a login. Choose one approach:\n"
+            "    --browser chrome          auto-extract from a running browser session\n"
+            "                              (install support: pip install rookiepy)\n"
+            "    --cookie-file FILE        Netscape-format cookie file exported from your\n"
+            "                              browser (e.g. via the 'Get cookies.txt LOCALLY'\n"
+            "                              extension for Chrome/Firefox)\n"
+            "    --cookies 'k=v; k2=v2'   paste the Cookie header value directly from\n"
+            "                              browser DevTools → Network → request headers"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -216,6 +234,10 @@ if __name__ == "__main__":
     parser.add_argument("--pdf-only", action="store_true", help="Skip downloading and only build PDF from existing images")
     parser.add_argument("--quiet", "-q", action="store_true", help="Suppress per-page messages in terminal")
     parser.add_argument("--log-file", help="Write log output to this file")
+    parser.add_argument("--browser",
+                        choices=["chrome", "firefox", "safari", "edge", "brave",
+                                 "chromium", "opera", "vivaldi", "librewolf"],
+                        help="Auto-extract cookies from this browser (requires: pip install rookiepy)")
     parser.add_argument("--cookies", help="Cookie string to send with requests (e.g. 'key=value; key2=value2')")
     parser.add_argument("--cookie-file", help="Path to a Netscape-format cookie file")
     args = parser.parse_args()
@@ -252,9 +274,18 @@ if __name__ == "__main__":
         num_pdf = args.start
         total = args.pages if args.pages else None
         consecutive_failures = 0
-        with tqdm(desc="Downloading pages", unit="page", total=total, dynamic_ncols=True, disable=args.quiet) as pbar:
-            cookies = load_cookies(args.cookies, args.cookie_file)
-            with httpx.Client(headers=HEADERS, cookies=cookies, follow_redirects=True, timeout=30) as client:
+        cookies = load_cookies(args.cookies, args.cookie_file, args.browser)
+        with httpx.Client(headers=HEADERS, cookies=cookies, follow_redirects=True, timeout=30) as client:
+            probe_url = base_url + f"-{str(args.start).rjust(3, '0')}.jpg"
+            with client.stream("GET", probe_url, follow_redirects=True) as r:
+                r.read()
+                if r.status_code == 200 and Path(r.url.path).suffix.lower() not in _IMAGE_EXTS:
+                    log.error(
+                        f"Authentication required — image request was redirected to {r.url}. "
+                        "Use --browser, --cookie-file, or --cookies to authenticate."
+                    )
+                    raise SystemExit(1)
+            with tqdm(desc="Downloading pages", unit="page", total=total, dynamic_ncols=True, disable=args.quiet) as pbar:
                 for i in itertools.count(args.start):
                     num = str(i).rjust(3, '0')
                     in_url = base_url + f"-{num}.jpg"
@@ -292,8 +323,8 @@ if __name__ == "__main__":
                         if status == 302:
                             log.error(
                                 "Server redirected the image request to a non-image URL — "
-                                "authentication is required. Pass session cookies via "
-                                "--cookies or --cookie-file."
+                                "authentication is required. Use --browser, --cookie-file, "
+                                "or --cookies to authenticate."
                             )
                             num_pdf = i
                             break

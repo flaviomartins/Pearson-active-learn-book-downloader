@@ -13,5 +13,8 @@ dependencies = [
     "tqdm>=4.66.0",
 ]
 
+[project.optional-dependencies]
+browser = ["rookiepy"]
+
 [project.scripts]
 pearson-downloader = "pearson_active_book_downloader.main:main"
